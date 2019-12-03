@@ -2,11 +2,13 @@ import System.Environment
 import System.Exit
 import Data.List.Split
 import qualified Data.Vector as V
+import Data.List
 
 main = do
   fileName <- getArgs >>= parse
-  progn <- readProgn fileName >>= resetProgn
-  print $ evaluate 0 progn
+  progn <- readProgn fileName
+  print $ find (\(n,v) -> (runProgn n v progn) == 19690720)
+            [(n,v) | n <- [1..99], v <- [1..99]]
 
 
 parse :: [String] -> IO String
@@ -20,8 +22,12 @@ readProgn fileName = do
   return $ V.fromList $ map read (splitOn [','] fileContents)
 
 
-resetProgn :: V.Vector Int -> IO (V.Vector Int)
-resetProgn progn = return $ progn V.// [(1,12), (2,2)]
+runProgn :: Int -> Int -> V.Vector Int -> Int
+runProgn noun verb progn = V.head $ evaluate 0 $ setProgn noun verb progn
+
+
+setProgn :: Int -> Int -> V.Vector Int -> V.Vector Int
+setProgn noun verb progn = progn V.// [(1,noun), (2,verb)]
 
 
 evaluate :: Int -> V.Vector Int -> V.Vector Int
