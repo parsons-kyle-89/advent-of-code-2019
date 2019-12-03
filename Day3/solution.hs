@@ -1,11 +1,11 @@
 import System.Environment
 import System.Exit
 import Data.List.Split (splitOn)
-import Data.List (minimumBy)
+import Data.List (minimumBy, findIndex)
 import Data.Ord (comparing)
 import qualified Data.Set as Set
 
-data Problem = One deriving (Show)
+data Problem = One | Two deriving (Show)
 data Direction = U | D | L | R deriving (Show, Read)
 type Position = (Int, Int)
 
@@ -13,21 +13,21 @@ type Position = (Int, Int)
 main = do
   (problem, directions) <- parseInput
   let solution = case problem of
-                   One -> solutionOne directions in
+                   One -> solutionOne directions
+                   Two -> solutionTwo directions in
     putStrLn $ show solution
   
 
 solutionOne :: [[Direction]] -> Int
 solutionOne directionss = let
-  pointss = map directionsToPoints directionss
-  overlapPoints = foldl1 Set.intersection pointss 
+  pointss = map directionsToPath directionss
+  overlapPoints = foldl1 Set.intersection $ map Set.fromList pointss 
   nonOriginOverlapPoints = Set.delete (0,0) overlapPoints in
   Set.findMin $ Set.map l1Norm nonOriginOverlapPoints
 
 
-directionsToPoints :: [Direction] -> Set.Set Position
-directionsToPoints directions = Set.fromList $
-  scanl updatePosition (0,0) directions
+directionsToPath :: [Direction] -> [Position]
+directionsToPath directions = scanl updatePosition (0,0) directions
 
 
 updatePosition :: Position -> Direction -> Position
@@ -39,6 +39,24 @@ updatePosition (x, y) R = (x, y+1)
 
 l1Norm :: Position -> Int
 l1Norm (x, y) = abs x + abs y
+  
+
+solutionTwo :: [[Direction]] -> Int
+solutionTwo directionss = let
+  paths = map directionsToPath directionss
+  overlapPoints = foldl1 Set.intersection $ map Set.fromList paths
+  nonOriginOverlapPoints = Set.delete (0,0) overlapPoints in
+  Set.findMin $ Set.map (pathNorm paths) nonOriginOverlapPoints
+
+
+pathNorm :: [[Position]] -> Position -> Int
+pathNorm paths inter = sum [singlePathNorm path inter | path <- paths]
+
+
+singlePathNorm :: [Position] -> Position -> Int
+singlePathNorm positions intersection = 
+  case findIndex (==intersection) positions of
+    Just idx -> idx
 
 
 parseInput :: IO (Problem, [[Direction]])
@@ -51,6 +69,7 @@ parseInput = do
 
 popProblem :: [String] -> IO (Problem, [String])
 popProblem ("1" : argsRest) = return (One, argsRest)
+popProblem ("2" : argsRest) = return (Two, argsRest)
 popProblem _ = putStrLn "problem parse error" >> exitFailure
 
 
