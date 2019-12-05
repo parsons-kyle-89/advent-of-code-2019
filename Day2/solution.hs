@@ -1,6 +1,5 @@
 import System.Environment
 import System.Exit
-import Data.List.Split
 import qualified Data.Vector as V
 import Data.List
 
@@ -18,12 +17,6 @@ main = do
 parse :: [String] -> IO String
 parse [fileName] = return fileName
 parse _ = putStrLn "Wrong number of arguments" >> exitFailure
-
-
-readProgn :: String -> IO (V.Vector Int)
-readProgn fileName = do
-  fileContents <- readFile fileName
-  return $ V.fromList $ map read (splitOn [','] fileContents)
 
 
 runProgn :: Int -> Int -> V.Vector Int -> IO Int
