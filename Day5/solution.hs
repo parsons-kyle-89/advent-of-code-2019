@@ -6,7 +6,7 @@ import Intcode
 main = do
   fileName <- getArgs >>= parseArgs
   progn <- readProgn fileName
-  evaluate 0 progn
+  runProgn progn
 
 parseArgs :: [String] -> IO String
 parseArgs [fileName] = return fileName
