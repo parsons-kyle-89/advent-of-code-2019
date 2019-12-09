@@ -1,14 +1,21 @@
+import System.Environment (getArgs)
+import System.Exit
 import Data.List.Split (splitOn)
-import Data.List (partition)
+import Data.List (partition, (\\))
 
 main = do
-  print $ totalRelations emptyTree
-  print $ totalRelations tree1
-  print $ totalRelations tree2
-  print $ totalRelations tree3
-  print $ decodeOrbitRels orbitRelEncoding
+  encoding <- getArgs >>= parseArgs >>= readFile
+  let orbitRels = decodeOrbitRels encoding
+  let orbitDiag = orbitDiagFromOrbitRels "COM" orbitRels
+  print $ indirectOrbits orbitDiag
+  let [pathToSanta] = pathBetween orbitDiag "YOU" "SAN"
+  print $ length pathToSanta - 3
 
-data Tree = Node [Tree] deriving (Show)
+parseArgs :: [String] -> IO String
+parseArgs [fileName] = return fileName
+parseArgs _ = putStrLn "Wrong number of arguments" >> exitFailure
+
+data OrbitDiag = Node Body [OrbitDiag] deriving (Show)
 type Body = String
 type OrbitRel = (Body, Body)
 
@@ -18,13 +25,13 @@ orbited = fst
 orbits :: OrbitRel -> Body
 orbits = snd
 
-totalRelations :: Tree -> Int
-totalRelations (Node trees) =
-  length trees +
-  sum (fmap localRelations trees) +
-  sum (fmap totalRelations trees)
+indirectOrbits :: OrbitDiag -> Int
+indirectOrbits (Node _ outerOrbits) =
+  length outerOrbits +
+  sum (fmap directindirectOrbits outerOrbits) +
+  sum (fmap indirectOrbits outerOrbits)
   where
-    localRelations (Node trees) = length trees + sum (fmap localRelations trees)
+    directindirectOrbits (Node _ outerOrbits) = length outerOrbits + sum (fmap directindirectOrbits outerOrbits)
 
 decodeOrbitRels :: String -> [OrbitRel]
 decodeOrbitRels encoding = fmap decodeOrbitRel (lines encoding)
@@ -32,50 +39,66 @@ decodeOrbitRels encoding = fmap decodeOrbitRel (lines encoding)
 decodeOrbitRel :: String -> OrbitRel
 decodeOrbitRel encoding  = let orbited : orbits : [] = splitOn ")" encoding in (orbited, orbits)
 
-treeFromOrbitRels :: Body -> [OrbitRel] -> Tree
-treeFromOrbitRels root orbitRels = let
-  localOrbitRels = filter ((==root).orbited) orbitRels 
+orbitDiagFromOrbitRels :: Body -> [OrbitRel] -> OrbitDiag
+orbitDiagFromOrbitRels com orbitRels = let
+  localOrbitRels = filter ((==com).orbited) orbitRels 
   localOrbits = fmap orbits localOrbitRels in
-  Node $ fmap (\newRoot -> treeFromOrbitRels newRoot orbitRels) localOrbits
+  Node com $ fmap (\newcom -> orbitDiagFromOrbitRels newcom orbitRels) localOrbits
 
-emptyTree :: Tree
-emptyTree = Node []
+pathTo :: OrbitDiag -> Body -> [[Body]]
+pathTo (Node name outerOrbits) target
+  | name == target = return $ [name]
+  | otherwise = do
+      restOfPath <- outerOrbits >>= (\outerOrbit -> pathTo outerOrbit target)
+      return $ name : restOfPath
+
+pathBetween :: OrbitDiag -> Body -> Body -> [[Body]]
+pathBetween orbitDiag source target = do
+  rootToSource <- pathTo orbitDiag source
+  rootToTarget <- pathTo orbitDiag target
+  let sourceSegment = rootToSource \\ rootToTarget
+  let targetSegment = rootToTarget \\ rootToSource
+  let intersection = fst $ last $ takeWhile (uncurry (==)) (zip rootToSource rootToTarget)
+  return $ (reverse sourceSegment) ++ [intersection] ++ targetSegment
+
+emptyOrbitDiag :: OrbitDiag
+emptyOrbitDiag = Node "A" []
 {-
-*
+A
 1
 -}
 
-tree1 :: Tree
-tree1 = Node [Node [], Node []]
+orbitDiag1 :: OrbitDiag
+orbitDiag1 = Node "A" [Node "B" [], Node "C" []]
 {-  
 
-  *
+  B
  /
-*
+A
  \
-  *
+  C
 
 2
 -}
 
-tree2 :: Tree
-tree2 = Node [Node [Node [Node [Node [Node []]]]]]
+orbitDiag2 :: OrbitDiag
+orbitDiag2 = Node "A" [Node "B" [Node "C" [Node "D" [Node "E" [Node "F" []]]]]]
 {-
 
-* - * - * - * - * - *
+A - B - C - D - E - F
 
 15
 -}
 
-tree3 :: Tree
-tree3 = Node [Node [], Node[], Node [Node [], Node [], Node [Node [Node []]]]]
+orbitDiag3 :: OrbitDiag
+orbitDiag3 = Node "A" [Node "B" [], Node "D" [], Node "C" [Node "E" [], Node "G" [], Node "F" [Node "H" [Node "I" []]]]]
 {-  
 
-  *   *
+  B   E
  /   /
-* - * - * - * - *
+A - C - F - H - I
  \   \
-  *   *
+  D   G
 
 16
 -}
