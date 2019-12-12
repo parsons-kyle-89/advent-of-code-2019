@@ -5,6 +5,7 @@ import System.IO (hFlush, stdout)
 import qualified Data.Vector as V
 import Data.List.Split (splitOn)
 import Data.Tuple (swap)
+import Control.Monad.State
 
 type Ptr = Int
 
@@ -27,6 +28,14 @@ data Operation = Exit
                | TestEqual Param Param Param
                | ParseFailure deriving (Show)
 
+type ListIO = ([Int], [Int])
+
+takeListIO :: State ListIO Int
+takeListIO = state $ (\((i:is), os) -> (i, (is, os)))
+
+putListIO :: Int -> State ListIO ()
+putListIO o = state $ (\(is, os) -> ((), (is, os ++ [o])))
+
 isExit :: Operation -> Bool
 isExit Exit = True
 isExit _ = False
@@ -44,12 +53,30 @@ readPrognState fileName = do
   memory <- readMemory fileName
   return (PrognState memory 0)
 
-executePrognIO :: PrognState -> IO PrognState
-executePrognIO prognState = do
+executeProgn :: (Monad m) => (Operation -> PrognState -> m PrognState) -> PrognState -> m PrognState
+executeProgn operExecutor prognState = do
   let oper = semanticAnalysis prognState
   if isExit oper
   then return prognState
-  else executeOperIO oper prognState >>= executePrognIO
+  else operExecutor oper prognState >>= executeProgn operExecutor
+
+executePrognListIO :: PrognState -> State ListIO PrognState
+executePrognListIO = executeProgn executeOperListIO
+
+executeOperListIO :: Operation -> PrognState -> State ListIO PrognState
+executeOperListIO (Input param) (PrognState memory ptr) = do
+  val <- takeListIO
+  let regOut = deref memory param (ptr + 1)
+  let newMemory = set memory regOut val
+  let newPtr = (ptr + 2)
+  return $ PrognState newMemory newPtr
+executeOperListIO (Output param) (PrognState memory ptr) = do
+  putListIO $ deref memory param (ptr + 1)
+  return $ PrognState memory (ptr + 2)
+executeOperListIO oper prognState = return $ executeOper oper prognState
+
+executePrognIO :: PrognState -> IO PrognState
+executePrognIO = executeProgn executeOperIO
 
 executeOperIO :: Operation -> PrognState -> IO PrognState
 executeOperIO (Input param) (PrognState memory ptr) = do
@@ -93,20 +120,20 @@ readInt :: IO Int
 readInt = getLine >>= return . read
 
 deref :: Memory -> Param -> Ptr -> Int
-deref memory ImmediateMode ptr = get memory ptr
+deref memory ImmediateMode ptr = getMem memory ptr
 deref memory PositionMode ptr = let
   newPtr = deref memory ImmediateMode ptr in
   deref memory ImmediateMode newPtr
 
-get :: Memory -> Ptr -> Int
-get = (V.!)
+getMem :: Memory -> Ptr -> Int
+getMem = (V.!)
 
 set :: Memory -> Ptr -> Int -> Memory
 set memory ptr val = memory V.// [(ptr, val)]
 
 semanticAnalysis :: PrognState -> Operation
 semanticAnalysis (PrognState memory ptr) = let
-  rawOpCode = (get memory ptr)
+  rawOpCode = (getMem memory ptr)
   (opCode, paramModes) = parseRawOpCode rawOpCode in
   generateOperation opCode paramModes
 
