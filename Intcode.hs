@@ -1,4 +1,14 @@
-module Intcode (PrognState (PrognState), readPrognState, executePrognIO) where
+module Intcode (
+  PrognState (PrognState), 
+  readPrognState,
+  executePrognIO,
+  executePrognListIO,
+  executeOperListIO,
+  semanticAnalysis,
+  Operation,
+  ListIO,
+  isExit,
+) where
 
 import System.Exit
 import System.IO (hFlush, stdout)
