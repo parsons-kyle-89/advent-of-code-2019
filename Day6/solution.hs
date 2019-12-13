@@ -2,13 +2,14 @@ import System.Environment (getArgs)
 import System.Exit
 import Data.List.Split (splitOn)
 import Data.List (partition, (\\))
+import Data.Maybe (listToMaybe, mapMaybe)
 
 main = do
   encoding <- getArgs >>= parseArgs >>= readFile
   let orbitRels = decodeOrbitRels encoding
   let orbitDiag = orbitDiagFromOrbitRels "COM" orbitRels
   print $ indirectOrbits orbitDiag
-  let [pathToSanta] = pathBetween orbitDiag "YOU" "SAN"
+  let Just pathToSanta = pathBetween orbitDiag "YOU" "SAN"
   print $ length pathToSanta - 3
 
 parseArgs :: [String] -> IO String
@@ -45,14 +46,14 @@ orbitDiagFromOrbitRels com orbitRels = let
   localOrbits = fmap orbits localOrbitRels in
   Node com $ fmap (\newcom -> orbitDiagFromOrbitRels newcom orbitRels) localOrbits
 
-pathTo :: OrbitDiag -> Body -> [[Body]]
+pathTo :: OrbitDiag -> Body -> Maybe [Body]
 pathTo (Node name outerOrbits) target
   | name == target = return $ [name]
   | otherwise = do
-      restOfPath <- outerOrbits >>= (\outerOrbit -> pathTo outerOrbit target)
+      restOfPath <- listToMaybe $ mapMaybe (\outerOrbit -> pathTo outerOrbit target) outerOrbits 
       return $ name : restOfPath
 
-pathBetween :: OrbitDiag -> Body -> Body -> [[Body]]
+pathBetween :: OrbitDiag -> Body -> Body -> Maybe [Body]
 pathBetween orbitDiag source target = do
   rootToSource <- pathTo orbitDiag source
   rootToTarget <- pathTo orbitDiag target
