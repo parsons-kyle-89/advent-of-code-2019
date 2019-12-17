@@ -1,3 +1,5 @@
+{-# language RankNTypes, FlexibleContexts #-}
+
 module Intcode (
   PrognState (PrognState), 
   readPrognState,
@@ -8,6 +10,11 @@ module Intcode (
   Operation,
   ListIO,
   isExit,
+  runIntcodeIO,
+  runIntcode,
+  initializeMachine,
+  Machine (Machine),
+  (==>),
 ) where
 
 import System.Exit
@@ -16,9 +23,12 @@ import qualified Data.Vector as V
 import Data.List.Split (splitOn)
 import Data.Tuple (swap)
 import Control.Monad.State
+import Data.Functor.Identity (Identity)
+import Control.Monad.Trans.State (StateT)
 
 data PrognState = PrognState Memory Ptr Ptr deriving (Show)
-data MachineState = MachineState Memory Ptr InputQueue OutputQueue deriving (Show)
+data Machine = Machine Memory Ptr InputQueue OutputQueue deriving (Show)
+type MachineState m a = (Monad m) => StateT Machine m a
 type Ptr = Int
 type Memory = V.Vector Int
 type InputQueue = [Int]
@@ -40,6 +50,8 @@ data Operation = Exit
                | TestEqual Param Param Param
                | ShiftBase Param
                | ParseFailure deriving (Show)
+
+data IntcodeResponse = Value Int | NeedsInput | ProgramExit deriving (Show)
 
 type ListIO = ([Int], [Int])
 
@@ -192,61 +204,57 @@ decodeParamMode 0 = PositionMode
 decodeParamMode 1 = ImmediateMode
 decodeParamMode 2 = RelativeMode
 
--- class Pipeable m where
---   enqueueInput :: a -> State (m a) ()
---   dequeueOutput :: State (m a) (Maybe a)
-
-(==>) :: a -> State a b -> (b, a)
-(==>) initialState stateFunc = runState stateFunc initialState
+(==>) :: s -> StateT s m a -> m (a, s)
+(==>) initialState stateFunc = runStateT stateFunc initialState
 infix 0 ==>
 
-initializeMachine :: [Int] -> MachineState
+initializeMachine :: [Int] -> Machine
 initializeMachine = initializeMachineFromMemory . V.fromList
 
-initializeMachineFromMemory :: Memory -> MachineState
-initializeMachineFromMemory memory = MachineState memory 0 [] []
+initializeMachineFromMemory :: Memory -> Machine
+initializeMachineFromMemory memory = Machine memory 0 [] []
 
-getMemory :: State MachineState Memory
-getMemory = state $ \ms@(MachineState memory _ _ _) -> (memory, ms)
+getMemory :: MachineState m Memory
+getMemory = state $ \ms@(Machine memory _ _ _) -> (memory, ms)
 
-getPtr :: State MachineState Ptr
-getPtr = state $ \ms@(MachineState _ ptr _ _) -> (ptr, ms)
+getPtr :: MachineState m Ptr
+getPtr = state $ \ms@(Machine _ ptr _ _) -> (ptr, ms)
 
-getInputQueue :: State MachineState InputQueue
-getInputQueue = state $ \ms@(MachineState _ _ inputQueue _) -> (inputQueue, ms)
+getInputQueue :: MachineState m InputQueue
+getInputQueue = state $ \ms@(Machine _ _ inputQueue _) -> (inputQueue, ms)
 
-getOutputQueue :: State MachineState OutputQueue
-getOutputQueue = state $ \ms@(MachineState _ _ _ outputQueue) -> (outputQueue, ms)
+getOutputQueue :: MachineState m OutputQueue
+getOutputQueue = state $ \ms@(Machine _ _ _ outputQueue) -> (outputQueue, ms)
 
-setPtr :: Ptr -> State MachineState ()
-setPtr newPtr = state $ \(MachineState m ptr iQ oQ) -> ((), MachineState m newPtr iQ oQ)
+setPtr :: Ptr -> MachineState m ()
+setPtr newPtr = state $ \(Machine m ptr iQ oQ) -> ((), Machine m newPtr iQ oQ)
 
-setMemory :: Memory -> State MachineState ()
+setMemory :: Memory -> MachineState m ()
 setMemory newMemory =
-  state $ \(MachineState memory p iQ oQ) -> ((), MachineState newMemory p iQ oQ)
+  state $ \(Machine memory p iQ oQ) -> ((), Machine newMemory p iQ oQ)
 
-setInputQueue :: InputQueue -> State MachineState ()
+setInputQueue :: InputQueue -> MachineState m ()
 setInputQueue newInputQueue =
-  state $ \(MachineState m p inputQueue oQ) -> ((), MachineState m p newInputQueue oQ)
+  state $ \(Machine m p inputQueue oQ) -> ((), Machine m p newInputQueue oQ)
 
-setOutputQueue :: OutputQueue -> State MachineState ()
+setOutputQueue :: OutputQueue -> MachineState m ()
 setOutputQueue newOutputQueue =
-  state $ \(MachineState m p iQ outputQueue) -> ((), MachineState m p iQ newOutputQueue)
+  state $ \(Machine m p iQ outputQueue) -> ((), Machine m p iQ newOutputQueue)
 
-jumpTo :: Ptr -> State MachineState ()
+jumpTo :: Ptr -> MachineState m ()
 jumpTo = setPtr
 
-incPtr :: Int -> State MachineState ()
+incPtr :: Int -> MachineState m ()
 incPtr by = do
   ptr <- getPtr
   jumpTo (ptr + by)
 
-enqueueInput :: Int -> State MachineState ()
+enqueueInput :: Int -> MachineState m ()
 enqueueInput input = do
   inputQueue <- getInputQueue
   setInputQueue (inputQueue ++ [input])
 
-dequeueInput :: State MachineState (Maybe Int)
+dequeueInput :: MachineState m (Maybe Int)
 dequeueInput = do
   inputQueue <- getInputQueue
   case inputQueue of
@@ -254,12 +262,12 @@ dequeueInput = do
     i:is -> do setInputQueue is
                return $ Just i
 
-enqueueOutput :: Int -> State MachineState ()
+enqueueOutput :: Int -> MachineState m ()
 enqueueOutput output = do
   outputQueue <- getOutputQueue
   setOutputQueue (outputQueue ++ [output])
   
-dequeueOutput :: State MachineState (Maybe Int)
+dequeueOutput :: MachineState m (Maybe Int)
 dequeueOutput = do
   outputQueue <- getOutputQueue
   case outputQueue of
@@ -267,24 +275,139 @@ dequeueOutput = do
     o:os -> do setOutputQueue os
                return $ Just o
 
-getAtPtr :: Ptr -> State MachineState Int
+getAtPtr :: Ptr -> MachineState m Int
 getAtPtr ptr = do
   memory <- getMemory
   return $ memory V.! ptr
 
-getAtCurrentPtr :: State MachineState Int
+getAtCurrentPtr :: MachineState m Int
 getAtCurrentPtr = do
   ptr <- getPtr
   getAtPtr ptr
 
-setAtPtr :: Ptr -> Int -> State MachineState ()
+derefAtPtr :: Param -> Ptr -> MachineState m Int
+derefAtPtr ImmediateMode ptr = getAtPtr ptr
+derefAtPtr PositionMode ptr = do
+  reference <- derefAtPtr ImmediateMode ptr
+  derefAtPtr ImmediateMode reference
+
+setAtPtr :: Ptr -> Int -> MachineState m ()
 setAtPtr ptr val = do
   memory <- getMemory
   let newMemory = memory V.// [(ptr, val)]
   setMemory newMemory
 
-getCurrentOper :: State MachineState Operation
+setrefAtPtr :: Param -> Ptr -> Int -> MachineState m ()
+setrefAtPtr PositionMode ptr val = do
+  reference <- derefAtPtr ImmediateMode ptr
+  setAtPtr reference val
+
+getCurrentOper :: MachineState m Operation
 getCurrentOper = do
   rawOpCode <- getAtCurrentPtr
   let (opCode, paramModes) = parseRawOpCode rawOpCode
   return $ generateOperation opCode paramModes
+
+inputValue :: Int -> MachineState m ()
+inputValue = enqueueInput
+
+data NextStep = Advance | GetInput | RaiseExit
+
+getNextStep :: MachineState m NextStep
+getNextStep = do
+  currentOper <- getCurrentOper
+  inputQueue <- getInputQueue
+  case (currentOper, inputQueue) of
+    (Exit, _) -> return $ RaiseExit
+    (Input _, []) -> return $ GetInput
+    otherwise -> return $ Advance
+
+getValue :: MachineState m IntcodeResponse
+getValue = do
+  maybeOutput <- dequeueOutput
+  case maybeOutput of
+    Just value -> return $ Value value
+    Nothing -> do
+      nextStep <- getNextStep
+      case nextStep of
+        GetInput -> return $ NeedsInput
+        RaiseExit -> return $ ProgramExit
+        Advance -> do
+          advance
+          getValue
+
+advance :: MachineState m ()
+advance = do
+  currentOper <- getCurrentOper
+  executeOperation currentOper
+
+advanceToEnd :: MachineState m ()
+advanceToEnd = do
+  currentOper <- getCurrentOper
+  case currentOper of
+    Exit -> return ()
+    otherwise -> do
+      advance
+      advanceToEnd
+
+data GenericBinaryOperation = GBO Param Param Param
+data GenericJumpOperation = GJO Param Param
+
+executeOperation :: Operation -> MachineState m ()
+executeOperation (Add left right out) = executeBinaryOperation (+) (GBO left right out)
+executeOperation (Multiply left right out) = executeBinaryOperation (*) (GBO left right out)
+executeOperation (Input param) = do
+  ptr <- getPtr
+  Just val <- dequeueInput
+  setrefAtPtr param (ptr + 1) val
+  incPtr 2
+executeOperation (Output param) = do
+  ptr <- getPtr
+  val <- derefAtPtr param (ptr + 1)
+  enqueueOutput val
+  incPtr 2
+executeOperation (JumpIfTrue test to) = executeJumpOperation (/=0) (GJO test to)
+executeOperation (JumpIfFalse test to) = executeJumpOperation (==0) (GJO test to)
+executeOperation (TestLessThan left right out) =
+  executeBinaryOperation (\l r -> fromEnum (l < r)) (GBO left right out)
+executeOperation (TestEqual left right out) =
+  executeBinaryOperation (\l r -> fromEnum (l == r)) (GBO left right out)
+-- executeOper (ShiftBase by) (PrognState memory ptr base) = let
+--   shiftBy = deref memory by (ptr + 1) base
+--   newBase = base + shiftBy
+--   newPtr = ptr + 2 in
+--   PrognState memory newPtr newBase
+
+executeBinaryOperation :: (Int -> Int -> Int) -> GenericBinaryOperation -> MachineState m ()
+executeBinaryOperation intOper (GBO left right out) = do
+  ptr <- getPtr
+  valLeft <- derefAtPtr left (ptr + 1)
+  valRight <- derefAtPtr right (ptr + 2)
+  let valOut = valLeft `intOper` valRight
+  setrefAtPtr out (ptr + 3) valOut
+  incPtr 4
+
+executeJumpOperation :: (Int -> Bool) -> GenericJumpOperation -> MachineState m ()
+executeJumpOperation pred (GJO test to) = do
+  ptr <- getPtr
+  valTest <- derefAtPtr test (ptr + 1)
+  newPtr <- if pred valTest then derefAtPtr to (ptr + 2) else return (ptr + 3)
+  setPtr newPtr
+
+runIntcodeIO :: MachineState IO ()
+runIntcodeIO = do
+  intcodeResponse <- getValue
+  case intcodeResponse of
+    ProgramExit -> return ()
+    NeedsInput -> do
+      liftIO $ putStr "input value: "
+      liftIO $ hFlush stdout
+      input <- liftIO readInt
+      inputValue input
+      runIntcodeIO
+    Value val -> do
+      liftIO $ putStrLn ("output value: " ++ show val)
+      runIntcodeIO
+
+runIntcode :: MachineState Identity ()
+runIntcode = advanceToEnd
