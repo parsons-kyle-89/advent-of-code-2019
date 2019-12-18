@@ -22,12 +22,13 @@ import System.IO (hFlush, stdout)
 import qualified Data.Vector as V
 import Data.List.Split (splitOn)
 import Data.Tuple (swap)
-import Control.Monad.State
 import Data.Functor.Identity (Identity)
+import Control.Monad (when)
+import Control.Monad.State
 import Control.Monad.Trans.State (StateT)
 
 data PrognState = PrognState Memory Ptr Ptr deriving (Show)
-data Machine = Machine Memory Ptr InputQueue OutputQueue deriving (Show)
+data Machine = Machine Memory Ptr Ptr InputQueue OutputQueue deriving (Show)
 type MachineState m a = (Monad m) => StateT Machine m a
 type Ptr = Int
 type Memory = V.Vector Int
@@ -212,34 +213,40 @@ initializeMachine :: [Int] -> Machine
 initializeMachine = initializeMachineFromMemory . V.fromList
 
 initializeMachineFromMemory :: Memory -> Machine
-initializeMachineFromMemory memory = Machine memory 0 [] []
+initializeMachineFromMemory memory = Machine memory 0 0 [] []
 
 getMemory :: MachineState m Memory
-getMemory = state $ \ms@(Machine memory _ _ _) -> (memory, ms)
+getMemory = state $ \ms@(Machine memory _ _ _ _) -> (memory, ms)
 
 getPtr :: MachineState m Ptr
-getPtr = state $ \ms@(Machine _ ptr _ _) -> (ptr, ms)
+getPtr = state $ \ms@(Machine _ ptr _ _ _) -> (ptr, ms)
+
+getBase :: MachineState m Ptr
+getBase = state $ \ms@(Machine _ _ base _ _) -> (base, ms)
 
 getInputQueue :: MachineState m InputQueue
-getInputQueue = state $ \ms@(Machine _ _ inputQueue _) -> (inputQueue, ms)
+getInputQueue = state $ \ms@(Machine _ _ _ inputQueue _) -> (inputQueue, ms)
 
 getOutputQueue :: MachineState m OutputQueue
-getOutputQueue = state $ \ms@(Machine _ _ _ outputQueue) -> (outputQueue, ms)
-
-setPtr :: Ptr -> MachineState m ()
-setPtr newPtr = state $ \(Machine m ptr iQ oQ) -> ((), Machine m newPtr iQ oQ)
+getOutputQueue = state $ \ms@(Machine _ _ _ _ outputQueue) -> (outputQueue, ms)
 
 setMemory :: Memory -> MachineState m ()
 setMemory newMemory =
-  state $ \(Machine memory p iQ oQ) -> ((), Machine newMemory p iQ oQ)
+  state $ \(Machine memory p b iQ oQ) -> ((), Machine newMemory p b iQ oQ)
+
+setPtr :: Ptr -> MachineState m ()
+setPtr newPtr = state $ \(Machine m ptr b iQ oQ) -> ((), Machine m newPtr b iQ oQ)
+
+setBase :: Ptr -> MachineState m ()
+setBase newBase = state $ \(Machine m p base iQ oQ) -> ((), Machine m p newBase iQ oQ)
 
 setInputQueue :: InputQueue -> MachineState m ()
 setInputQueue newInputQueue =
-  state $ \(Machine m p inputQueue oQ) -> ((), Machine m p newInputQueue oQ)
+  state $ \(Machine m p b inputQueue oQ) -> ((), Machine m p b newInputQueue oQ)
 
 setOutputQueue :: OutputQueue -> MachineState m ()
 setOutputQueue newOutputQueue =
-  state $ \(Machine m p iQ outputQueue) -> ((), Machine m p iQ newOutputQueue)
+  state $ \(Machine m p b iQ outputQueue) -> ((), Machine m p b iQ newOutputQueue)
 
 jumpTo :: Ptr -> MachineState m ()
 jumpTo = setPtr
@@ -248,6 +255,21 @@ incPtr :: Int -> MachineState m ()
 incPtr by = do
   ptr <- getPtr
   jumpTo (ptr + by)
+
+shiftBase :: Int -> MachineState m ()
+shiftBase by = do
+  base <- getBase
+  setBase (base + by)
+
+expandMemoryS :: Ptr -> MachineState m ()
+expandMemoryS ptr = do
+  memory <- getMemory
+  let lenMemory = length memory
+  if (ptr >= lenMemory) 
+  then do
+    let newMemory = memory V.++ V.replicate (ptr - lenMemory + 1) 0
+    setMemory newMemory
+  else return ()
 
 enqueueInput :: Int -> MachineState m ()
 enqueueInput input = do
@@ -277,6 +299,7 @@ dequeueOutput = do
 
 getAtPtr :: Ptr -> MachineState m Int
 getAtPtr ptr = do
+  expandMemoryS ptr
   memory <- getMemory
   return $ memory V.! ptr
 
@@ -290,9 +313,14 @@ derefAtPtr ImmediateMode ptr = getAtPtr ptr
 derefAtPtr PositionMode ptr = do
   reference <- derefAtPtr ImmediateMode ptr
   derefAtPtr ImmediateMode reference
+derefAtPtr RelativeMode ptr = do
+  base <- getBase
+  reference <- derefAtPtr ImmediateMode ptr
+  derefAtPtr ImmediateMode (base + reference)
 
 setAtPtr :: Ptr -> Int -> MachineState m ()
 setAtPtr ptr val = do
+  expandMemoryS ptr
   memory <- getMemory
   let newMemory = memory V.// [(ptr, val)]
   setMemory newMemory
@@ -301,6 +329,10 @@ setrefAtPtr :: Param -> Ptr -> Int -> MachineState m ()
 setrefAtPtr PositionMode ptr val = do
   reference <- derefAtPtr ImmediateMode ptr
   setAtPtr reference val
+setrefAtPtr RelativeMode ptr val = do
+  base <- getBase
+  reference <- derefAtPtr ImmediateMode ptr
+  setAtPtr (base + reference) val
 
 getCurrentOper :: MachineState m Operation
 getCurrentOper = do
@@ -372,11 +404,12 @@ executeOperation (TestLessThan left right out) =
   executeBinaryOperation (\l r -> fromEnum (l < r)) (GBO left right out)
 executeOperation (TestEqual left right out) =
   executeBinaryOperation (\l r -> fromEnum (l == r)) (GBO left right out)
--- executeOper (ShiftBase by) (PrognState memory ptr base) = let
---   shiftBy = deref memory by (ptr + 1) base
---   newBase = base + shiftBy
---   newPtr = ptr + 2 in
---   PrognState memory newPtr newBase
+executeOperation (ShiftBase by)  = do
+  ptr <- getPtr
+  base <- getBase
+  shiftBy <- derefAtPtr by (ptr + 1)
+  shiftBase shiftBy
+  incPtr 2
 
 executeBinaryOperation :: (Int -> Int -> Int) -> GenericBinaryOperation -> MachineState m ()
 executeBinaryOperation intOper (GBO left right out) = do

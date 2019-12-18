@@ -1,6 +1,5 @@
 import System.Environment (getArgs)
 import System.Exit
-import Data.Functor.Identity (Identity)
 
 import Intcode
 
