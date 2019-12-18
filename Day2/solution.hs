@@ -23,7 +23,7 @@ parse _ = putStrLn "Wrong number of arguments" >> exitFailure
 runProgn' :: Int -> Int -> [Int] -> (Int, Int, Int)
 runProgn' noun verb memory = let
   newMemory = setMemory noun verb memory
-  Identity (_, Machine finalMemory _ _ _) = initializeMachine newMemory ==> runIntcode in
+  Identity (_, Machine finalMemory _ _ _ _) = initializeMachine newMemory ==> runIntcode in
   (V.head finalMemory, noun, verb)
 
 
