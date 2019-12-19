@@ -8,6 +8,7 @@ module Intcode (
   IntcodeResponse (Value, NeedsInput, ProgramExit), 
   inputValue,
   getValue,
+  isExiting,
   (==>),
 ) where
 
@@ -46,7 +47,7 @@ data IntcodeResponse = Value Int | NeedsInput | ProgramExit deriving (Show)
 
 (==>) :: s -> StateT s m a -> m (a, s)
 (==>) initialState stateFunc = runStateT stateFunc initialState
-infix 0 ==>
+infixr 0 ==>
 
 initializeMachine :: [Int] -> Machine
 initializeMachine = initializeMachineFromMemory . V.fromList
@@ -192,6 +193,14 @@ getNextStep = do
     (Exit, _) -> return $ RaiseExit
     (Input _, []) -> return $ GetInput
     otherwise -> return $ Advance
+
+isExiting :: MachineState m Bool
+isExiting = do
+  currentOper <- getCurrentOper
+  outputQueue <- getOutputQueue
+  case (currentOper, outputQueue) of
+    (Exit, []) -> return $ True
+    otherwise -> return $ False
 
 getValue :: MachineState m IntcodeResponse
 getValue = do
