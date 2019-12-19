@@ -21,20 +21,24 @@ main = do
   fileContents <- readFile fileName
   let progn = read ("[" ++ fileContents ++ "]")
   ((_, HullPainter _ _ _ work), _) <- initializeMachine progn ==>
-                                        initializeHullPainter progn ==>
+                                        initializeHullPainter Black ==>
                                           runHullPainter
   print $ work
+  ((_, HullPainter hull _ _ _), _) <- initializeMachine progn ==>
+                                        initializeHullPainter White ==>
+                                          runHullPainter
+  putStr $ image hull
 
 parseArgs :: [String] -> IO String
 parseArgs [fileName] = return fileName
 parseArgs _ = putStrLn "Wrong number of arguments" >> exitFailure
 
-initializeHullPainter :: [Int] -> HullPainter
-initializeHullPainter memory = let
-  hull = Map.empty :: Hull
+initializeHullPainter :: HullSection -> HullPainter
+initializeHullPainter initialHullSection = let
   location = (0, 0)
-  direction = North
-  totalWork = 0 in
+  hull = Map.singleton location initialHullSection
+  direction = West
+  totalWork = 1 in
   HullPainter hull location direction totalWork
 
 runHullPainter :: PainterState m ()
@@ -163,3 +167,40 @@ setDirection newDirection = state $ \(HullPainter h l _ w) -> ((), HullPainter h
 
 setWork :: Int -> PainterState m ()
 setWork newWork = state $ \(HullPainter h l d _) -> ((), HullPainter h l d newWork)
+
+image :: Hull -> String
+image hull = let
+  (colMin, colMax) = getImageYBounds hull in
+  unlines $ map (imageRow colMin colMax) (hullRows hull)
+
+imageRow :: Int -> Int -> (Int, Hull) -> String
+imageRow colMin colMax hullBundle = map (imageChar hullBundle) [colMin..colMax]
+
+imageChar :: (Int, Hull) -> Int -> Char
+imageChar (row, hull) col = let
+  hullSection = Map.findWithDefault Black (row, col) hull in
+  hullSectionToChar hullSection
+
+hullSectionToChar :: HullSection -> Char
+hullSectionToChar Black = '.'
+hullSectionToChar White = '#'
+
+hullRows :: Hull -> [(Int, Hull)]
+hullRows hull = let
+  (rowMin, rowMax) = getImageXBounds hull in
+  map (sliceHull hull) [rowMin..rowMax]
+
+sliceHull :: Hull -> Int -> (Int, Hull)
+sliceHull hull row = (row, Map.filterWithKey (\(x, _) _ -> x == row) hull)
+
+getImageXBounds :: Hull -> (Int, Int)
+getImageXBounds = getImageBoundsHelper fst
+
+getImageYBounds :: Hull -> (Int, Int)
+getImageYBounds = getImageBoundsHelper snd
+
+getImageBoundsHelper :: ((Int, Int) -> Int) -> Hull -> (Int, Int)
+getImageBoundsHelper by hull = let
+  max_ = maximum $ map by (Map.keys hull)
+  min_ = minimum $ map by (Map.keys hull) in
+  (min_, max_)
