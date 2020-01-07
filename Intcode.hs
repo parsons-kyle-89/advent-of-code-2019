@@ -8,6 +8,7 @@ module Intcode (
   IntcodeResponse (Value, NeedsInput, ProgramExit), 
   inputValue,
   getValue,
+  getAllValues,
   isExiting,
   (==>),
 ) where
@@ -215,6 +216,15 @@ getValue = do
         Advance -> do
           advance
           getValue
+
+getAllValues :: MachineState m [Int]
+getAllValues = do
+  currentValue <- getValue
+  case currentValue of
+    Value val -> do
+      otherValues <- getAllValues
+      return $ val:otherValues
+    otherwise -> return $ []
 
 advance :: MachineState m ()
 advance = do
